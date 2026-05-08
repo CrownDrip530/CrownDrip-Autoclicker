@@ -5,6 +5,11 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
+
+    <!-- App icon -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+
+    <AssemblyName>CrownDrip Autoclicker</AssemblyName>
   </PropertyGroup>
 
 </Project>
