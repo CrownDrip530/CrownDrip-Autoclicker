@@ -1,0 +1,25 @@
+name: Build CrownDrip Autoclicker
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - run: dotnet restore
+
+      - run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrownDripAutoclicker
+          path: bin/Release/net8.0-windows/win-x64/publish/
