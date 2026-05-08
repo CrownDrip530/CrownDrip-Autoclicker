@@ -3,165 +3,120 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 
 namespace CrownDripAutoclicker;
 
 public partial class MainWindow : Window
 {
-    [DllImport("user32.dll")]
-    static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr i);
+    [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr i);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int v);
 
-    [DllImport("user32.dll")]
-    static extern short GetAsyncKeyState(int v);
+    bool _running;
+    int  _clicks;
+    CancellationTokenSource? _cts;
+    readonly Random _rand = new();
 
-    const uint DOWN = 0x0002;
-    const uint UP = 0x0004;
-
-    bool running;
-    int clicks;
-    CancellationTokenSource? token;
-    Random rand = new();
-
-    bool fullscreen = false;
+    Key  _hotkey   = Key.NumPad0;
+    int  _hotkeyVk = 0x60; // VK_NUMPAD0
+    bool _binding;
 
     public MainWindow()
     {
         InitializeComponent();
-
-        CpsSlider.ValueChanged += (_, _) =>
-            CpsText.Text = $"{(int)CpsSlider.Value} CPS";
-
-        ToggleButton.Click += async (_, _) =>
-        {
-            if (running) Stop();
-            else await Start();
-        };
-
+        CpsSlider.ValueChanged += (_, _) => CpsText.Text = ((int)CpsSlider.Value).ToString();
+        UseDelay.Checked       += (_, _) => DelayBox.IsEnabled = true;
+        UseDelay.Unchecked     += (_, _) => DelayBox.IsEnabled = false;
         Task.Run(HotkeyLoop);
     }
 
     async Task HotkeyLoop()
     {
+        bool wasDown = false;
         while (true)
         {
-            if ((GetAsyncKeyState(0x75) & 1) != 0)
-            {
-                Dispatcher.Invoke(async () =>
-                {
-                    if (running) Stop();
-                    else await Start();
-                });
-            }
-
-            await Task.Delay(50);
+            bool down = (GetAsyncKeyState(_hotkeyVk) & 0x8000) != 0;
+            if (down && !wasDown && !_binding)
+                Dispatcher.Invoke(() => { if (_running) Stop(); else _ = Start(); });
+            wasDown = down;
+            await Task.Delay(15);
         }
     }
 
+    void Toggle_Click(object s, RoutedEventArgs e) { if (_running) Stop(); else _ = Start(); }
+
     async Task Start()
     {
-        running = true;
-        token = new CancellationTokenSource();
-
-        ToggleButton.Content = "STOP";
+        _running = true;
+        _cts = new();
+        ToggleBtn.Content = "STOP";
+        ToggleBtn.Background = new SolidColorBrush(Color.FromRgb(190, 18, 60));
         StatusText.Text = "Running";
-
-        StartRainbow();
-
+        StatusText.Foreground = Dot.Fill = new SolidColorBrush(Color.FromRgb(52, 211, 153));
+        var tok = _cts.Token;
         try
         {
-            while (!token.IsCancellationRequested)
+            while (!tok.IsCancellationRequested)
             {
-                int delay;
-
-                if (UseDelayMode.IsChecked == true)
-                {
-                    if (!int.TryParse(DelayBox.Text, out delay))
-                        delay = 50;
-                }
-                else
-                {
-                    int cps = (int)CpsSlider.Value;
-
-                    if (Randomize.IsChecked == true)
-                        cps += rand.Next(-3, 4);
-
-                    cps = Math.Max(1, cps);
-
-                    delay = 1000 / cps;
-                }
-
-                mouse_event(DOWN, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(UP, 0, 0, 0, UIntPtr.Zero);
-
-                clicks++;
-                ClickCount.Text = $"{clicks} clicks";
-
-                await Task.Delay(Math.Max(1, delay), token.Token);
+                int ms = UseDelay.IsChecked == true
+                    ? (int.TryParse(DelayBox.Text, out int d) ? Math.Max(1, d) : 50)
+                    : 1000 / Math.Max(1, (int)CpsSlider.Value + (Randomize.IsChecked == true ? _rand.Next(-3, 4) : 0));
+                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+                ClickCount.Text = $"{++_clicks:N0} clicks";
+                await Task.Delay(Math.Max(1, ms), tok);
             }
         }
-        catch { }
+        catch (OperationCanceledException) { }
     }
 
     void Stop()
     {
-        running = false;
-        token?.Cancel();
-
-        ToggleButton.Content = "START";
+        _running = false;
+        _cts?.Cancel(); _cts = null;
+        ToggleBtn.Content = "START";
+        ToggleBtn.Background = new SolidColorBrush(Color.FromRgb(109, 40, 217));
         StatusText.Text = "Idle";
-
-        StopRainbow();
+        StatusText.Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139));
+        Dot.Fill = new SolidColorBrush(Color.FromRgb(55, 65, 81));
     }
 
-    void StartRainbow()
+    void HotkeyBtn_Click(object s, RoutedEventArgs e)
     {
-        var anim = new DoubleAnimation(0, 360, new Duration(TimeSpan.FromSeconds(2)))
+        if (_binding) return;
+        if (_running) Stop();
+        _binding = true;
+        HotkeyBtn.Content = "…";
+        HotkeyHint.Text = " · press any key";
+        KeyDown += OnBind;
+    }
+
+    void OnBind(object s, KeyEventArgs e)
+    {
+        e.Handled = true;
+        KeyDown -= OnBind;
+        _binding = false;
+        if (e.Key != Key.Escape)
         {
-            RepeatBehavior = RepeatBehavior.Forever
-        };
-
-        var rt = new RotateTransform();
-        GlowBorder.RenderTransform = rt;
-        GlowBorder.RenderTransformOrigin = new Point(0.5, 0.5);
-
-        rt.BeginAnimation(RotateTransform.AngleProperty, anim);
-    }
-
-    void StopRainbow()
-    {
-        GlowBorder.RenderTransform = null;
-    }
-
-    // WINDOW CONTROLS
-    private void DragWindow(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        if (e.LeftButton == System.Windows.Input.MouseButtonState.Pressed)
-            DragMove();
-    }
-
-    private void Minimize_Click(object sender, RoutedEventArgs e)
-    {
-        WindowState = WindowState.Minimized;
-    }
-
-    private void Close_Click(object sender, RoutedEventArgs e)
-    {
-        Application.Current.Shutdown();
-    }
-
-    private void Fullscreen_Click(object sender, RoutedEventArgs e)
-    {
-        if (!fullscreen)
-        {
-            WindowState = WindowState.Maximized;
-            fullscreen = true;
+            _hotkey   = e.Key;
+            _hotkeyVk = KeyInterop.VirtualKeyFromKey(e.Key);
+            HotkeyBtn.Content = KeyName(e.Key);
         }
-        else
-        {
-            WindowState = WindowState.Normal;
-            fullscreen = false;
-        }
+        else HotkeyBtn.Content = KeyName(_hotkey);
+        HotkeyHint.Text = " · click to rebind";
     }
+
+    static string KeyName(Key k) => k switch
+    {
+        Key.NumPad0 => "Num 0", Key.NumPad1 => "Num 1", Key.NumPad2 => "Num 2",
+        Key.NumPad3 => "Num 3", Key.NumPad4 => "Num 4", Key.NumPad5 => "Num 5",
+        Key.NumPad6 => "Num 6", Key.NumPad7 => "Num 7", Key.NumPad8 => "Num 8",
+        Key.NumPad9 => "Num 9", _ => k.ToString()
+    };
+
+    void TitleBar_MouseDown(object s, MouseButtonEventArgs e)
+        { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
+    void Minimize_Click(object s, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    void Close_Click(object s, RoutedEventArgs e) { Stop(); Application.Current.Shutdown(); }
 }
