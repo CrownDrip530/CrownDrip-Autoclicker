@@ -21,11 +21,12 @@ public partial class MainWindow : Window
     int  _hotkeyVk = 0x60; // VK_NUMPAD0
     bool _binding;
 
-    // Gold colours
-    static readonly SolidColorBrush GoldBrush   = new(Color.FromRgb(200, 168,  48));
-    static readonly SolidColorBrush GreenBrush  = new(Color.FromRgb( 52, 211, 153));
-    static readonly SolidColorBrush DimBrush    = new(Color.FromRgb( 42,  32,   8));
-    static readonly SolidColorBrush DimTextBrush= new(Color.FromRgb( 58,  48,  16));
+    // ── Shared brushes ───────────────────────────────────────────────────────
+    static readonly Color GoldColor   = Color.FromRgb(200, 168,  48);
+    static readonly Color GreenColor  = Color.FromRgb( 52, 211, 153);
+    static readonly Color RedColor    = Color.FromRgb(200,  60,  40);
+    static readonly Color DimColor    = Color.FromRgb( 42,  32,   8);
+    static readonly Color DimTxtColor = Color.FromRgb( 58,  48,  16);
 
     public MainWindow()
     {
@@ -33,7 +34,7 @@ public partial class MainWindow : Window
         Task.Run(HotkeyLoop);
     }
 
-    // ── Hotkey polling loop ──────────────────────────────────────────────────
+    // ── Hotkey polling (background thread) ───────────────────────────────────
     async Task HotkeyLoop()
     {
         bool wasDown = false;
@@ -47,52 +48,40 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Toggle button ────────────────────────────────────────────────────────
+    // ── Toggle button handler ─────────────────────────────────────────────
     void Toggle_Click(object s, RoutedEventArgs e)
     {
         if (_running) Stop(); else _ = Start();
     }
 
-    // ── Start clicking ───────────────────────────────────────────────────────
+    // ── Start clicking ────────────────────────────────────────────────────
     async Task Start()
     {
         _running = true;
         _cts = new CancellationTokenSource();
 
-        // Read delay value once on UI thread before entering loop
-        int baseDelay = ParseDelay();
-        bool jitter   = Randomize.IsChecked == true;
+        // Capture jitter flag on UI thread before entering loop
+        bool jitter = Randomize.IsChecked == true;
 
-        // Update UI
+        // Update UI state → running
         ToggleBtn.Content    = "STOP";
-        ToggleBtn.Foreground = new SolidColorBrush(Color.FromRgb(10, 9, 0));
-        // Switch button to red-ish dark gold when running
-        var stopGrad = new LinearGradientBrush();
-        stopGrad.GradientStops.Add(new GradientStop(Color.FromRgb(200, 60, 40), 0));
-        stopGrad.GradientStops.Add(new GradientStop(Color.FromRgb(150, 30, 20), 0.5));
-        stopGrad.GradientStops.Add(new GradientStop(Color.FromRgb(110, 20, 10), 1));
-        stopGrad.StartPoint = new System.Windows.Point(0, 0);
-        stopGrad.EndPoint   = new System.Windows.Point(0, 1);
-        // We can't set LinearGradientBrush on Background directly via code easily in WPF
-        // so just set a solid colour:
-        ToggleBtn.Background = new SolidColorBrush(Color.FromRgb(180, 40, 30));
-
+        ToggleBtn.Foreground = new SolidColorBrush(Colors.White);
+        SetToggleBackground(RedColor, Color.FromRgb(160, 40, 30), Color.FromRgb(120, 24, 16));
         StatusText.Text       = "ON";
-        StatusText.Foreground = GreenBrush;
-        Dot.Fill              = GreenBrush;
+        StatusText.Foreground = new SolidColorBrush(GreenColor);
+        Dot.Fill              = new SolidColorBrush(GreenColor);
 
         var tok = _cts.Token;
         try
         {
             while (!tok.IsCancellationRequested)
             {
-                // Re-read delay each iteration so live edits take effect
                 int ms = ParseDelay();
                 if (jitter) ms += _rand.Next(-10, 11);
                 ms = Math.Max(1, ms);
 
-                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); // left down
-                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); // left up
+                mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); // MOUSEEVENTF_LEFTDOWN
+                mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); // MOUSEEVENTF_LEFTUP
 
                 await Task.Delay(ms, tok).ConfigureAwait(false);
             }
@@ -100,40 +89,62 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) { }
     }
 
-    // ── Stop clicking ────────────────────────────────────────────────────────
+    // ── Stop clicking ─────────────────────────────────────────────────────
     void Stop()
     {
         _running = false;
         _cts?.Cancel();
         _cts = null;
 
+        // Restore gold gradient on button
         ToggleBtn.Content    = "START";
         ToggleBtn.Foreground = new SolidColorBrush(Color.FromRgb(10, 9, 0));
-        ToggleBtn.Background = null; // let XAML gradient take over again — re-apply via style reset
-        // Force re-apply the gold gradient by clearing local value
-        ToggleBtn.ClearValue(BackgroundProperty);
+        SetToggleBackground(
+            Color.FromRgb(240, 208, 96),
+            Color.FromRgb(200, 168, 48),
+            Color.FromRgb(160, 120, 32));
 
         StatusText.Text       = "IDLE";
-        StatusText.Foreground = DimTextBrush;
-        Dot.Fill              = DimBrush;
+        StatusText.Foreground = new SolidColorBrush(DimTxtColor);
+        Dot.Fill              = new SolidColorBrush(DimColor);
     }
 
-    // ── Parse delay textbox safely ───────────────────────────────────────────
+    // Helper: apply a 3-stop vertical gradient to the toggle button
+    void SetToggleBackground(Color top, Color mid, Color bot)
+    {
+        var grad = new LinearGradientBrush
+        {
+            StartPoint = new System.Windows.Point(0, 0),
+            EndPoint   = new System.Windows.Point(0, 1)
+        };
+        grad.GradientStops.Add(new GradientStop(top, 0.0));
+        grad.GradientStops.Add(new GradientStop(mid, 0.5));
+        grad.GradientStops.Add(new GradientStop(bot, 1.0));
+        // The XAML template uses Border.Background; we update it via the button's Tag
+        // and re-trigger via the code-behind approach: set directly on the child border
+        // Since WPF ControlTemplate owns the Border, we manipulate via Background property:
+        ToggleBtn.Background = grad;
+        // Note: because the ControlTemplate uses {TemplateBinding Background} on Bd,
+        // setting ToggleBtn.Background propagates correctly into the template.
+        // (The XAML template must use <Border Background="{TemplateBinding Background}">)
+    }
+
+    // ── Parse delay textbox safely ────────────────────────────────────────
     int ParseDelay()
     {
-        if (int.TryParse(DelayBox?.Text, out int d) && d > 0)
+        if (int.TryParse(DelayBox?.Text?.Trim(), out int d) && d >= 1)
             return d;
-        return 50; // fallback default
+        return 50;
     }
 
-    // ── Hotkey binding ───────────────────────────────────────────────────────
+    // ── Hotkey binding ────────────────────────────────────────────────────
     void HotkeyBtn_Click(object s, RoutedEventArgs e)
     {
         if (_binding) return;
         if (_running) Stop();
         _binding = true;
         HotkeyBtn.Content = "…";
-        HotkeyHint.Text   = "  · press any key";
+        HotkeyHint.Text   = "  · press a key";
         KeyDown += OnBind;
     }
 
@@ -147,14 +158,10 @@ public partial class MainWindow : Window
         {
             _hotkey   = e.Key;
             _hotkeyVk = KeyInterop.VirtualKeyFromKey(e.Key);
-            HotkeyBtn.Content = KeyName(e.Key);
-        }
-        else
-        {
-            HotkeyBtn.Content = KeyName(_hotkey);
         }
 
-        HotkeyHint.Text = "  · rebind";
+        HotkeyBtn.Content = KeyName(_hotkey);
+        HotkeyHint.Text   = "  · rebind";
     }
 
     static string KeyName(Key k) => k switch
@@ -169,10 +176,14 @@ public partial class MainWindow : Window
         Key.NumPad7 => "Num 7",
         Key.NumPad8 => "Num 8",
         Key.NumPad9 => "Num 9",
+        Key.F1      => "F1",  Key.F2  => "F2",  Key.F3  => "F3",
+        Key.F4      => "F4",  Key.F5  => "F5",  Key.F6  => "F6",
+        Key.F7      => "F7",  Key.F8  => "F8",  Key.F9  => "F9",
+        Key.F10     => "F10", Key.F11 => "F11", Key.F12 => "F12",
         _           => k.ToString()
     };
 
-    // ── Window chrome ────────────────────────────────────────────────────────
+    // ── Window chrome ─────────────────────────────────────────────────────
     void TitleBar_MouseDown(object s, MouseButtonEventArgs e)
     {
         if (e.LeftButton == MouseButtonState.Pressed) DragMove();
